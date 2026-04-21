@@ -1,0 +1,24 @@
+# 1. 保护核心配置文件
+config.yaml
+
+# 2. Python 虚拟环境文件夹
+venv/
+env/
+.venv/
+
+# 3. Python 缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 4. 临时文件
+*.tmp
+*.log
+.DS_Store
+
+# 5. 向量库文件夹
+faiss_index/
+
+# 6. 上传的测试 PDF 文件夹
+15data/
