@@ -1,127 +1,131 @@
 import json
 import yaml
-from typing import TypedDict
+import sqlite3
+from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
 from tavily import TavilyClient
 from openai import OpenAI
 
-# 1. 从 config.yaml 读取配置
+# --- 1. 配置 ---
 with open("config.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
-# 2.初始化客户端
-openai_client = OpenAI(
-    api_key=config["aliyun_api_key"],
-    base_url=config["aliyun_base_url"]
-)
+openai_client = OpenAI(api_key=config["aliyun_api_key"], base_url=config["aliyun_base_url"])
 tavily_client = TavilyClient(api_key=config["tavily_api_key"])
 
-# 3. 定义 LangGraph 状态
+# --- 2. 状态定义 ---
 class AgentState(TypedDict):
-    messages: list
-    search_result: str
-    final_answer: str
+    messages: list          # 对话历史，包含 user/assistant/tool 消息
+    final_answer: str       # 最终回答（提取后展示）
 
-# 4. 定义搜索函数 (供 LangGraph 节点调用)
-def search_web(query):
-    """ 使用 Tavily 客户端执行搜索 """
-    print(f"--- [LangGraph] 正在执行 Tavily 搜索: '{query}' ---")
-    response = tavily_client.search(query, max_results=5)
-    # 格式化搜索结果以便阅读
-    formatted_results = []
+# --- 3. 工具函数 ---
+def search_web(query: str) -> str:
+    """联网搜索"""
+    print(f"--- 正在搜索: {query} ---")
+    response = tavily_client.search(query, max_results=5, search_depth="advanced", time_range="month")
+    results = []
     for item in response.get("results", []):
-        formatted_results.append(f"标题：{item.get('title')}\n内容：{item.get('content')}\n来源：{item.get('url')}")
-    return "\n\n".join(formatted_results)
+        results.append(f"标题：{item.get('title')}\n内容：{item.get('content')}\n来源：{item.get('url')}")
+    return "\n\n".join(results)
 
-# 5. LangGraph 节点函数
-# 节点 1：决定是否需要搜索
-def decide_node(state: AgentState):
-    messages = state["messages"]
-    tools = [{
+def query_database(query_str: str) -> str:
+    """执行 SQL 查询"""
+    print(f"--- 正在执行SQL: {query_str} ---")
+    conn = sqlite3.connect('company.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query_str)
+        results = cursor.fetchall()
+        return str(results)
+    except Exception as e:
+        return f"SQL错误: {e}"
+    finally:
+        conn.close()
+
+# 工具列表 (Function Calling 定义)
+TOOLS = [
+    {
         "type": "function",
         "function": {
-            "name": "tavily_search",
-            "description": "搜索互联网获取最新信息",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"]
-            }
+            "name": "search_web",
+            "description": "搜索互联网获取最新信息。当需要实时数据、新闻或未知事实时使用。",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
         }
-    }]
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "查询公司员工数据库，输入为标准的 SQL SELECT 语句。",
+            "parameters": {"type": "object", "properties": {"query_str": {"type": "string"}}, "required": ["query_str"]}
+        }
+    }
+]
 
+# --- 4. Agent 节点 ---
+def call_model(state: AgentState):
+    messages = state["messages"]
+    # 添加系统提示，引导模型生成更好的搜索词
+    if not any(m.get("role") == "system" for m in messages):
+        messages = [{"role": "system", "content": "你是一个信息检索专家。当需要搜索时，务必在查询词中加上'2026年'或'最新'等时效性关键词。"}] + messages
     response = openai_client.chat.completions.create(
         model="qwen-plus",
         messages=messages,
-        tools=tools,
+        tools=TOOLS,
         tool_choice="auto"
     )
-
     msg = response.choices[0].message
-    if msg.tool_calls:
-        # 如果需要搜索，将工具调用信息保存到状态中
-        return {"messages": messages, "tool_call": msg.tool_calls[0]}
-    else:
-        # 如果不需要搜索，直接返回模型的最终答案
-        return {"messages": messages, "final_answer": msg.content}
+    new_messages = [msg]  # 只追加 assistant 消息
+    return {"messages": new_messages, "final_answer": msg.content if not msg.tool_calls else ""}
 
-# 节点 2：执行搜索
-def search_node(state: AgentState):
-    tool_call = state.get("tool_call")
-    if tool_call:
-        args = json.loads(tool_call.function.arguments)
-        result = search_web(args["query"])
-        return {"search_result": result, "tool_call": tool_call}
-    return {}
-
-# 节点 3：生成最终回答
-def answer_node(state: AgentState):
-    messages = state["messages"]
-    search_result = state.get("search_result", "")
-    tool_call = state.get("tool_call")
-
-    if tool_call and search_result:
-        # 将搜索工具的结果添加到消息历史中
-        messages.append({
+def call_tools(state: AgentState):
+    """执行工具调用，返回 ToolMessage"""
+    last_msg = state["messages"][-1]
+    tool_calls = last_msg.tool_calls
+    tool_messages = []
+    for tc in tool_calls:
+        func_name = tc.function.name
+        args = json.loads(tc.function.arguments)
+        if func_name == "search_web":
+            result = search_web(args["query"])
+        elif func_name == "query_database":
+            result = query_database(args["query_str"])
+        else:
+            result = f"未知工具: {func_name}"
+        tool_messages.append({
             "role": "tool",
-            "tool_call_id": tool_call.id,
-            "content": search_result
+            "tool_call_id": tc.id,
+            "content": result
         })
+    return {"messages": tool_messages}
 
-    response = openai_client.chat.completions.create(
-        model="qwen-plus",
-        messages=messages
-    )
-    return {"final_answer": response.choices[0].message.content}
+# --- 5. 条件边 ---
+def should_continue(state: AgentState) -> Literal["tools", "end"]:
+    last_msg = state["messages"][-1]
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+        return "tools"
+    return "end"
 
-# 条件判断：是否需要搜索
-def should_search(state: AgentState):
-    if state.get("final_answer"):
-        return "end"
-    return "search"
-
-# 6. 构建和运行 LangGraph 工作流
+# --- 6. 构建图 ---
 workflow = StateGraph(AgentState)
+workflow.add_node("agent", call_model)
+workflow.add_node("tools", call_tools)
 
-# 添加节点
-workflow.add_node("decide", decide_node)
-workflow.add_node("search", search_node)
-workflow.add_node("answer", answer_node)
+workflow.set_entry_point("agent")
+workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", "end": END})
+workflow.add_edge("tools", "agent")          # 工具执行后返回 agent
 
-# 设置流程
-workflow.set_entry_point("decide")
-workflow.add_conditional_edges("decide", should_search, {"search": "search", "end": END})
-workflow.add_edge("search", "answer")
-workflow.add_edge("answer", END)
-
-# 编译 Agent
 agent = workflow.compile()
 
-# 7. 测试运行
+# --- 7. 测试运行 ---
 if __name__ == "__main__":
-    user_query = "2026年十五五规划的最新动态"
+    # 示例问题：需要同时搜索 + 查库
+    query = "研发部最高工资的员工是谁？另外请搜索2026年关于AI应用的最新政策或新闻？"
     print("=" * 50)
-    print(f"🧠 [LangGraph Agent] 问题：{user_query}")
-    print("=" * 50)
-    result = agent.invoke({"messages": [{"role": "user", "content": user_query}]})
-    print(f"🤖 回答：{result['final_answer']}")
+    print(f"🧠 问题：{query}")
+    result = agent.invoke({"messages": [{"role": "user", "content": query}]})
+    # 提取最终回答（最后一条 assistant 消息的内容）
+    final_msg = result["messages"][-1]
+    answer = final_msg.content if hasattr(final_msg, "content") else "未能生成回答"
+    print(f"🤖 回答：{answer}")

@@ -8,6 +8,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from openai import OpenAI
+from rank_bm25 import BM25Okapi
+from sentence_transformers import CrossEncoder   # 替换 FlagEmbedding
+import numpy as np
 
 # 1. 从 config.yaml 读取配置
 with open("config.yaml", "r", encoding="utf-8") as f:
@@ -15,6 +18,11 @@ with open("config.yaml", "r", encoding="utf-8") as f:
 
 st.set_page_config(page_title="PDF智能问答", page_icon="📚")
 st.title("📚 PDF 智能问答系统")
+
+# 重排序模型缓存加载（使用 sentence_transformers）
+@st.cache_resource
+def load_reranker():
+    return CrossEncoder('BAAI/bge-reranker-base', max_length=512)
 
 # 2. 初始化
 if "vector_store" not in st.session_state:
@@ -46,6 +54,11 @@ with st.sidebar:
                 encode_kwargs={'normalize_embeddings': True}
             )
             st.session_state.vector_store = FAISS.from_documents(chunks, embeddings)
+            # 为混合检索保存 BM25 索引和文本
+            all_chunks_text = [chunk.page_content for chunk in chunks]
+            tokenized_chunks = [text.split() for text in all_chunks_text]
+            st.session_state.bm25 = BM25Okapi(tokenized_chunks)
+            st.session_state.all_chunks_text = all_chunks_text
 
             os.unlink(tmp_path)  # 删除临时文件
 
@@ -71,9 +84,27 @@ if prompt := st.chat_input("输入你的问题"):
         if st.session_state.vector_store is None:
             reply = "请先上传 PDF 文件"
         else:
-            # RAG 检索
-            docs = st.session_state.vector_store.similarity_search(prompt, k=3)
-            context = "\n\n".join([d.page_content for d in docs])
+            # ----- 混合检索 + 重排序 -----
+            # 1. 向量检索
+            vector_docs = st.session_state.vector_store.similarity_search(prompt, k=10)
+            vector_texts = [doc.page_content for doc in vector_docs]
+
+            # 2. BM25 关键词检索
+            bm25 = st.session_state.bm25
+            all_texts = st.session_state.all_chunks_text
+            bm25_texts = bm25.get_top_n(prompt.split(), all_texts, n=10)
+
+            # 3. 合并去重
+            candidates = list(set(vector_texts + bm25_texts))
+
+            # 4. 重排序取 Top-3（使用 CrossEncoder）
+            reranker = load_reranker()
+            pairs = [[prompt, cand] for cand in candidates]
+            scores = reranker.predict(pairs)   # 关键修改：predict 替代 compute_score
+            top_indices = np.argsort(scores)[::-1][:3]
+            top_texts = [candidates[i] for i in top_indices]
+
+            context = "\n\n".join(top_texts)
 
             full_prompt = f"""根据以下资料回答问题。如果资料中没有答案，请回答"根据现有资料暂时无法回答"。
 
