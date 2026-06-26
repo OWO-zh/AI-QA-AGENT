@@ -21,5 +21,7 @@ __pycache__/
 faiss_index/
 
 # 6. 上传的测试 PDF 文件夹
-15data/"company.db" 
-"company.db" 
+15data/
+
+# 7. 数据库文件
+company.db
