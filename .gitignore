@@ -22,3 +22,4 @@ faiss_index/
 
 # 6. 上传的测试 PDF 文件夹
 15data/"company.db" 
+"company.db" 
