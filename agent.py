@@ -1,4 +1,5 @@
 import json
+import os
 import yaml
 import sqlite3
 import re
@@ -98,7 +99,8 @@ def query_database(query_str: str) -> str:
     start = time.time()
     conn = None
     try:
-        conn = sqlite3.connect('company.db')
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'company.db')
+        conn = sqlite3.connect(db_path)
         cur = conn.cursor()
         cur.execute(query_str)
         rows = cur.fetchall()
@@ -237,32 +239,44 @@ def tool_execute_node(state: AgentState):
     err_msg = ""
     retry = state.get("retry_count", 0)
 
-    for tc in tool_calls:
-        func_name = tc["function"]["name"]
-        try:
-            args = json.loads(tc["function"]["arguments"])
-        except json.JSONDecodeError:
-            results.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name,
+    try:    # 新增：保护整个工具执行过程
+        for tc in tool_calls:
+            func_name = tc["function"]["name"]
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except json.JSONDecodeError:
+                results.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name,
                             "content": "参数解析失败"})
-            all_ok = False
-            continue
-
-        if func_name == "search_web":
-            content = search_web(args.get("query", ""))
-        elif func_name == "query_database":
-            content = query_database(args.get("query_str", ""))
-            if "SQL执行错误" in content or "SQL执行被拦截" in content:
-                sql_err = True
-                err_msg = content
                 all_ok = False
-        elif func_name == "search_knowledge_base":
-            content = search_knowledge_base(args.get("query", ""))
-        else:
-            content = f"未知工具: {func_name}"
-            all_ok = False
+                continue
 
-        # 工具消息附带 name 字段，方便前端展示
-        results.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": content})
+            if func_name == "search_web":
+                content = search_web(args.get("query", ""))
+            elif func_name == "query_database":
+                content = query_database(args.get("query_str", ""))
+                logger.info(f"[SQL] 返回结果长度: {len(content)}")  # 新增加日志
+                if "SQL执行错误" in content or "SQL执行被拦截" in content:
+                    sql_err = True
+                    err_msg = content
+                    all_ok = False
+            elif func_name == "search_knowledge_base":
+                content = search_knowledge_base(args.get("query", ""))
+            else:
+                content = f"未知工具: {func_name}"
+                all_ok = False
+
+            # 工具消息附带 name 字段，方便前端展示
+            results.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": content})
+
+    except Exception as e:
+        logger.error(f"工具执行节点整体异常: {str(e)}")
+        results.append({
+            "role": "tool",
+            "tool_call_id": "error",
+            "name": "unknown",
+            "content": f"工具执行异常: {str(e)}"
+            })
+        all_ok = False
 
     status = "success" if all_ok else "partial"
     logger.info(f"<<< 工具执行 {status} 耗时 {time.time() - start:.2f}s")
@@ -282,17 +296,28 @@ def answer_node(state: AgentState):
     sys_msg = {
         "role": "system",
         "content": (
+            "【强制规则1】用户问题中如果包含“文档”、“PDF”、“文件”、“上传”等字样，必须只调用 search_knowledge_base 工具，禁止调用其他工具。\n"
+            "【强制规则2】你现在处于最终答案生成阶段，禁止输出任何工具调用（tool_calls），直接给出自然语言回答。\n"
             "请基于工具返回的信息生成最终回答：\n"
             "1. 整合数据库、搜索、知识库结果\n"
             "2. 标注信息来源（如“来自内部数据库”）\n"
             "3. 信息不足时明确说明，不编造\n"
-            "4. 语言简洁专业"
+            "4. 语言简洁专业\n"
+            "5. 请用不超过 3 句话回答，总字数不超过 150 字\n"
+            "6. 如果上下文包含多份不同文档的内容，请分别总结每份文档的核心主题，不要遗漏。"
         )
     }
     # 组合消息
     all_msgs = [sys_msg] + messages
     resp = openai_client.chat.completions.create(model="qwen-plus", messages=all_msgs)
     answer = resp.choices[0].message.content
+    # 如果答案为空，补上提示
+    if not answer or answer.strip() == "":
+        answer = "抱歉，系统暂时无法整合信息，请稍后重试或者换一种问法。"
+    
+    # 新增：如果答案看起来像工具调用，则强制替换
+    if answer.strip().startswith('{') and '"name"' in answer and '"arguments"' in answer:
+        answer = "系统处理复杂查询时出现了内部错误，已自动重定向，请稍后重试或简化提问。"
     logger.info(f"<<< 答案生成 耗时 {time.time() - start:.2f}s")
     return {
         "final_answer": answer,

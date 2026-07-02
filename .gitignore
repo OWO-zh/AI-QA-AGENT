@@ -25,3 +25,6 @@ faiss_index/
 
 # 7. 数据库文件
 company.db
+
+.env
+*.db

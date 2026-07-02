@@ -3,7 +3,9 @@
 基于 LangGraph + RAG + Function Calling 构建的企业级三源信息整合系统。Agent 自主识别用户意图，协同调度私有知识库、内部数据库与联网搜索三类工具，输出带溯源信息的精准回答，内置完整的安全校验、容错降级与可视化交互能力。
 
 ## 🖥️ 演示
-![项目演示](assets/demogif.gif)
+<p align="center">
+  <img src="assets/demogif.gif" alt="演示动画" width="85%">
+</p>
 
 ## ✨ 核心特性
 - **三源信息协同**：打通私有文档知识库、业务数据库、公网实时资讯，支持单工具与多工具混合调用
@@ -16,10 +18,12 @@
 ## 🛠️ 技术栈
 | 分类 | 技术选型 |
 |------|----------|
-| AI 核心框架 | LangGraph、LangChain、Function Calling、Prompt Engineering |
-| 向量与数据 | FAISS 向量数据库、HuggingFace Embeddings、结构化数据库 |
-| 大模型与工具 | 阿里云百炼（通义千问）、Tavily Search API |
-| 交互与部署 | Streamlit、Python、Docker |
+| Agent框架 | LangGraph（状态图、条件边、自动重试）|
+| RAG 引擎 | LangChain + FAISS + BM25 + BGE-Reranker + HuggingFace Embeddings(懒加载) |
+| 大模型 | qwen-plus(兼容 OpenAI API) |
+| 搜索引擎 | Tavily Search API |
+| 前端 | Streamlit(自定义css主题) |
+| 语言 | Python 3.10+ |
 | 工程能力 | 全链路日志、会话状态管理、异常重试机制 |
 
 ## 🏗️ 整体架构
@@ -44,40 +48,55 @@ cd ai-qa-agent
 ```bash
 pip install -r requirements.txt
 ```
-3. 配置环境变量
-项目根目录创建 `.env` 文件，填入对应密钥：
-```
-LLM_API_KEY=你的大模型API密钥
-TAVILY_API_KEY=你的Tavily搜索密钥
-DB_PATH=本地数据库路径
-```
-1. 启动Web界面
+3. 初始化数据库
 ```bash
-set HF_ENDPOINT=https://hf-mirror.com
-streamlit run app.py
-启动后浏览器自动访问 http://localhost:8501 即可使用。
+python init_db.py
 ```
+4. 准备配置文件
+
+在项目根目录创建 `config.yaml`（已加入 .gitignore，不会上传）：
+```yaml
+aliyun_api_key: "你的阿里云百炼API密钥"
+aliyun_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+tavily_api_key: "你的Tavily搜索密钥"
+```
+4. 设置 HuggingFace 镜像（国内用户）
+```bash
+# Windows
+set HF_ENDPOINT=https://hf-mirror.com
+
+# Mac/Linux
+export HF_ENDPOINT=https://hf-mirror.com
+```
+5. 启动Web界面
+```bash
+streamlit run app.py
+```
+启动后浏览器自动访问 http://localhost:8501 即可使用。
+
 
 ## 📁 项目目录结构
 ```plaintext
 ai-qa-agent/
-├── app.py                # Streamlit 交互界面入口
-├── agent.py              # Agent 核心逻辑与状态机定义
-├── tools/                # 工具实现模块
-│   ├── rag_tool.py       # 知识库检索工具
-│   ├── sql_tool.py       # 数据库查询工具
-│   └── search_tool.py    # 联网搜索工具
-├── config/               # 配置与常量定义
-├── utils/                # 日志、校验、通用工具函数
-├── requirements.txt      # 项目依赖
-└── README.md
+├── app.py              # Streamlit 前端界面
+├── agent.py            # Agent 核心逻辑（LangGraph 三节点状态图）
+├── rag_utils.py        # RAG 知识库管理器（懒加载 Embedding，文件校验）
+├── init_db.py          # 数据库初始化脚本（含测试员工数据）
+├── config.yaml.example # 配置文件模板（复制为 config.yaml 并填入真实密钥）
+├── requirements.txt    # 精简核心依赖（已锁定版本）
+├── assets/
+│   └── demogif.gif     # 演示动画
+└── docs/
+    └── TECHNICAL.md    # 详细技术文档
 ```
 ## 📊 效果指标
-- **工具调度准确率**：90%+
+- **工具调度准确率**：100%(20/20)
 - **复杂查询平均工具调用次数**：< 2 次
 - **RAG 知识范围内回答准确率**：90%+
-- **无匹配内容拒答准确率**：95%+
+- **无匹配内容拒答准确率**：96%
 - **系统静默失败率**：< 1%
+- **多工具复杂查询**:10-15s
+- **SQL自纠错**:2/2成功
 
 ## 🛤️ 后续规划
 
@@ -87,11 +106,10 @@ ai-qa-agent/
 - 增加 Prompt 注入防护与输出内容审核
 
 ## 📖 详细文档
-参阅 [技术文档](docs.md) 了解架构设计、模块细节和安全策略。
-
-## 📞 联系方式
-
-- 邮箱：[YASK2025@163.com](mailto:YASK2025@163.com)
+参阅 [技术文档](docs/TECHNICAL.md) 了解架构设计、模块细节和安全策略。
 
 ## 📝 许可证
 MIT License
+
+## 📞 联系方式
+- 邮箱：[YASK2025@163.com](mailto:YASK2025@163.com)
