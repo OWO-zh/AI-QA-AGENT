@@ -1,0 +1,13 @@
+# config.yaml — 企业智能信息助手 配置文件模板
+# 使用方法：复制此文件为 config.yaml 并填入真实密钥
+# config.yaml 已在 .gitignore 中，不会被提交到 Git 仓库
+
+# ===== 必填 =====
+aliyun_api_key: "你的阿里云百炼API密钥"
+aliyun_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+tavily_api_key: "你的Tavily搜索密钥"
+
+# ===== 可选（不填则使用默认值）=====
+llm_model: "qwen-plus"                         # 大模型名称，可选 qwen-max / qwen-turbo-latest
+reranker_model: "BAAI/bge-reranker-base"       # 重排序模型，可选 bge-reranker-v2-m3
+max_retries: 2                                  # SQL 错误最大重试次数

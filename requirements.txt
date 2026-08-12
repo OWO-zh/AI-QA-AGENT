@@ -12,3 +12,4 @@ sentence-transformers==5.4.1
 rank-bm25==0.2.2
 pypdf==6.10.0
 numpy==2.4.4
+hf-transfer==0.1.9

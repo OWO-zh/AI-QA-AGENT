@@ -20,11 +20,10 @@ __pycache__/
 # 5. 向量库文件夹
 faiss_index/
 
-# 6. 上传的测试 PDF 文件夹
+# 6. HuggingFace 模型缓存（本地开发，云端自动重建）
+.hf_cache/
+
+# 7. 上传的测试 PDF 文件夹
 15data/
 
-# 7. 数据库文件
-company.db
-
 .env
-*.db
