@@ -221,19 +221,13 @@ llm_model: "qwen-plus"
 reranker_model: "BAAI/bge-reranker-base"
 max_retries: 2
 ```
-5. 设置 HuggingFace 镜像（国内用户）
-```bash
-# Windows
-set HF_ENDPOINT=https://hf-mirror.com
-
-# Mac/Linux
-export HF_ENDPOINT=https://hf-mirror.com
-```
-6. 启动Web界面
+5. 启动Web界面
 ```bash
 streamlit run app.py
 ```
 启动后浏览器自动访问 http://localhost:8501 即可使用。
+
+> 💡 HuggingFace 模型下载**无需手动配置**：代码已根据运行环境自动切换——本地开发自动启用国内镜像（hf-mirror.com）并把模型缓存到项目 `.hf_cache` 目录；Streamlit Cloud 云端自动直连 HuggingFace 官方源。
 
 ### ☁️ Streamlit Cloud 云端部署
 
@@ -288,7 +282,7 @@ ai-qa-agent/
 ├── rag_utils.py          # RAG 知识库管理器（懒加载 Embedding + 混合检索 + 来源多样性）
 ├── init_db.py            # 数据库初始化脚本（含 8 条测试员工数据）
 ├── config.yaml.example   # 配置文件模板（6 key，复制为 config.yaml 即用）
-├── requirements.txt      # 精简核心依赖（14 个包，已锁定版本）
+├── requirements.txt      # 精简核心依赖（15 个包，已锁定版本）
 ├── assets/
 │   └── demogif.gif       # 演示动画
 └── docs/
