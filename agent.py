@@ -38,10 +38,9 @@ from langgraph.graph import StateGraph, END
 from tavily import TavilyClient
 from openai import OpenAI
 
-from rag_utils import RAGManager
-
 # ==================== 配置加载（本地优先，云端自动降级） ====================
 config = {}
+is_cloud = False  # 是否运行在 Streamlit Cloud（用于环境相关配置的自动切换）
 
 # 优先尝试从环境变量或 Streamlit Secrets 读取
 try:
@@ -52,14 +51,38 @@ try:
     config["llm_model"] = st.secrets.get("llm_model", "qwen-plus")
     config["reranker_model"] = st.secrets.get("reranker_model", "BAAI/bge-reranker-base")
     config["max_retries"] = int(st.secrets.get("max_retries", "2"))
+    is_cloud = True  # 全部 secrets 读取成功才判定为云端
 except Exception:
     # 本地开发时从 config.yaml 读取
+    is_cloud = False
     try:
         with open("config.yaml", "r", encoding="utf-8") as f:
             yaml_config = yaml.safe_load(f)
         config.update(yaml_config)
     except FileNotFoundError:
         raise RuntimeError("未找到 config.yaml 或 Streamlit Secrets，请配置其中一种")
+
+# ==================== HuggingFace 下载配置（须在导入 rag_utils 之前设置）====================
+# hf_transfer 存在时才启用加速，避免依赖缺失导致下载崩溃
+try:
+    import hf_transfer  # noqa: F401
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+except ImportError:
+    pass
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"  # 大模型下载超时设为5分钟
+
+if is_cloud:
+    # 云端：使用默认缓存目录（/home/adminuser/.cache，保证可写），
+    # 直连 HuggingFace（美国服务器速度最快），不设置 HF_HOME
+    pass
+else:
+    # 本地：启用国内镜像 + 项目内缓存目录（避免占用C盘）
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+    _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hf_cache")
+    os.environ["HF_HOME"] = _CACHE_DIR
+    os.environ["TRANSFORMERS_CACHE"] = os.path.join(_CACHE_DIR, "transformers")
+
+from rag_utils import RAGManager
 
 openai_client = OpenAI(api_key=config["aliyun_api_key"], base_url=config["aliyun_base_url"])
 tavily_client = TavilyClient(api_key=config["tavily_api_key"])

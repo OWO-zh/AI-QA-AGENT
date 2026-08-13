@@ -24,15 +24,8 @@ import traceback
 import logging
 from typing import Tuple
 
-# Hugging Face 国内镜像加速 全局生效
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"  # 大模型下载超时设为5分钟
-
-# 统一缓存路径，使用项目目录避免C盘占用
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hf_cache")
-os.environ["HF_HOME"] = _CACHE_DIR
-os.environ["TRANSFORMERS_CACHE"] = os.path.join(_CACHE_DIR, "transformers")
+# 注：HuggingFace 镜像与缓存等环境变量在 agent.py 配置加载后统一设置
+# （本地自动启用国内镜像，Streamlit Cloud 自动直连），此处保持纯净的第三方导入。
 
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
