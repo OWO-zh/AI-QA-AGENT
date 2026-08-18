@@ -16,13 +16,14 @@ app.py — Streamlit 可视化界面
 
 import os
 import sys
+import time
 import uuid
 
 import streamlit as st
 
 # 确保项目根目录在导入路径中
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from agent import agent, set_rag_manager, logger, config
+from agent import agent, set_rag_manager, logger, config, is_cloud
 from rag_utils import RAGManager
 
 # ---------- 页面配置 ----------
@@ -234,6 +235,10 @@ Agent 会<b>自动识别意图、自主调度工具、整合多源信息</b>给�
 """
 
 
+# ===== 云端演示防护配置（仅 is_cloud 时生效，本地开发不受限制）=====
+MAX_QUESTIONS = 25   # 每个会话最多提问次数（覆盖 20 条用例 + 5 次余量）
+MIN_INTERVAL = 8     # 两次提问最小间隔（秒），防脚本刷量
+
 # ---------- 模型缓存（Streamlit Cloud 休眠重启不重复下载）----------
 @st.cache_resource(show_spinner="正在加载 AI 模型（首次需下载 Embedding + Reranker，约 1.1GB，请耐心等待）...")
 def create_rag_manager(reranker_model: str):
@@ -275,10 +280,62 @@ def init_session():
         }
     if "pending_question" not in st.session_state:
         st.session_state.pending_question = None
+    if "authed" not in st.session_state:
+        st.session_state.authed = False
+    if "question_count" not in st.session_state:
+        st.session_state.question_count = 0
+    if "last_question_time" not in st.session_state:
+        st.session_state.last_question_time = 0.0
 
 
 init_session()
 set_rag_manager(st.session_state.rag_manager)
+
+# ---------- 云端访问保护：密码门（仅云端生效，本地开发直接跳过）----------
+if is_cloud:
+    demo_pwd = config.get("demo_password", "")
+    if not st.session_state.authed:
+        if not demo_pwd:
+            st.error("演示密码未配置，请联系管理员。")
+            st.stop()
+        st.markdown("# 🤖 企业智能信息助手")
+        st.markdown("本演示为邀请制访问，请输入访问密码后进入。")
+        with st.form("auth_form"):
+            pwd_input = st.text_input("访问密码", type="password")
+            submitted = st.form_submit_button("进入演示")
+        if submitted:
+            if pwd_input == demo_pwd:
+                st.session_state.authed = True
+                st.rerun()
+            else:
+                st.error("密码错误，请重试")
+        st.stop()  # 未通过验证前，不渲染页面其余部分
+
+
+# ===== 云端防护：提问额度检查（本地开发始终放行）=====
+def try_consume_quota() -> bool:
+    """检查并消耗一次提问额度。
+
+    云端（is_cloud）执行两道限制：
+        1. 间隔限制：两次提问至少间隔 MIN_INTERVAL 秒，防脚本连发
+        2. 次数限制：每个会话最多 MAX_QUESTIONS 次提问
+
+    返回:
+        True 表示允许提问（并已消耗额度），False 表示被拦截
+    """
+    if not is_cloud:
+        return True
+    now = time.time()
+    if now - st.session_state.last_question_time < MIN_INTERVAL:
+        wait = int(MIN_INTERVAL - (now - st.session_state.last_question_time)) + 1
+        st.warning(f"提问过于频繁，请等待 {wait} 秒后再试。")
+        return False
+    if st.session_state.question_count >= MAX_QUESTIONS:
+        st.warning(f"演示提问次数已达上限（{MAX_QUESTIONS} 次），感谢体验！")
+        return False
+    st.session_state.question_count += 1
+    st.session_state.last_question_time = now
+    return True
 
 
 # ===== 处理预设问题的函数 =====
@@ -312,6 +369,9 @@ def process_message(prompt: str):
 # ---------- 侧边栏 ----------
 with st.sidebar:
     st.markdown("## ⚙️ 控制面板")
+    if is_cloud:
+        remaining = max(0, MAX_QUESTIONS - st.session_state.question_count)
+        st.caption(f"🔒 演示模式：剩余 {remaining}/{MAX_QUESTIONS} 次提问")
 
     # ── 预设问题区 ──
     st.markdown("#### 💡 一键测试")
@@ -422,19 +482,21 @@ for i, msg in enumerate(st.session_state.messages):
 if st.session_state.pending_question:
     prompt = st.session_state.pending_question
     st.session_state.pending_question = None
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    with st.chat_message("assistant"):
-        process_message(prompt)
-    st.rerun()
+    if try_consume_quota():
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            process_message(prompt)
+        st.rerun()
 
 # 用户输入
 if prompt := st.chat_input("输入问题，或点击左侧边栏的预设问题一键测试："):
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    with st.chat_message("assistant"):
-        process_message(prompt)
-    st.rerun()
+    if try_consume_quota():
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            process_message(prompt)
+        st.rerun()
 
 # ---------- 页脚 ----------
 st.divider()

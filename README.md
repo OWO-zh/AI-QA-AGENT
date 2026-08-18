@@ -248,6 +248,7 @@ tavily_api_key = "你的Tavily搜索密钥"
 llm_model = "qwen-plus"
 reranker_model = "BAAI/bge-reranker-base"
 max_retries = "2"
+demo_password = "你的演示访问密码"
 ```
 
 > ⚠️ **注意**：Streamlit Secrets 使用 **TOML 格式**（`key = "value"`），不是 YAML（`key: "value"`）。`config.yaml` 已加入 `.gitignore`，不会被上传到 GitHub，API Key 只通过 Secrets 注入云端。
@@ -259,6 +260,8 @@ max_retries = "2"
 **4. 验证**
 
 部署成功后访问 `https://你的app名.streamlit.app`：
+- 首先需输入访问密码（`demo_password`），防止陌生人消耗 API 额度
+- 云端演示内置防护：每会话 25 次提问上限 + 8 秒间隔限制（本地开发不受影响）
 - 首页自动显示欢迎引导和 20 条预设问题
 - 首次访问时模型自动下载（约 1.1GB，spinner 有提示），后续秒级响应
 - 侧边栏 "技术架构" 页面可直接查看完整技术设计

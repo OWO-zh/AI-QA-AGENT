@@ -51,6 +51,7 @@ try:
     config["llm_model"] = st.secrets.get("llm_model", "qwen-plus")
     config["reranker_model"] = st.secrets.get("reranker_model", "BAAI/bge-reranker-base")
     config["max_retries"] = int(st.secrets.get("max_retries", "2"))
+    config["demo_password"] = st.secrets.get("demo_password", "")
     is_cloud = True  # 全部 secrets 读取成功才判定为云端
 except Exception:
     # 本地开发时从 config.yaml 读取
