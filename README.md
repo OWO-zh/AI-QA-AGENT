@@ -122,7 +122,7 @@ flowchart LR
     subgraph recall["双路召回层"]
         direction TB
         S1["FAISS 语义检索<br/>向量相似度匹配"]:::decide
-        S2["BM25 关键词检索<br/>词法精确匹配"]:::tool
+        S2["BM25 关键词检索<br/>jieba中文分词+词法匹配"]:::tool
     end
     class recall subgraph_box
 
@@ -169,7 +169,7 @@ flowchart LR
 ## ✨ 核心特性
 - **三源信息协同**：打通私有文档知识库、业务数据库、公网实时资讯，支持单工具与多工具混合调用
 - **智能意图路由**：基于大模型推理自动匹配最优信息源，无需人工指定工具类型
-- **高可靠 RAG 问答**：FAISS 向量 + BM25 关键词双路召回 + BGE-Reranker 精排，来源多样性算法避免检索偏置，答案可溯源至文档片段
+- **高可靠 RAG 问答**：FAISS 向量 + BM25（jieba 中文分词）关键词双路召回 + BGE-Reranker 精排，来源多样性算法避免检索偏置，答案可溯源至文档片段
 - **云端部署体验**：Streamlit Cloud 一键部署，`@st.cache_resource` 缓存模型避免冷启动等待，首次下载后秒级响应
 - **企业级安全防护**：SQL 白名单校验、文件格式白名单、会话级数据隔离，敏感数据不出域
 - **多级容错降级**：工具重试→关键词扩展/SQL自纠错→LLM异常静默兜底→全局兜底回答，四级机制，系统静默失败率 0%
@@ -179,7 +179,7 @@ flowchart LR
 | 分类 | 技术选型 |
 |------|----------|
 | Agent框架 | LangGraph（状态图、条件边、自动重试）|
-| RAG 引擎 | LangChain + FAISS + BM25 + BGE-Reranker + HuggingFace Embeddings(懒加载) |
+| RAG 引擎 | LangChain + FAISS + BM25(jieba中文分词) + BGE-Reranker + HuggingFace Embeddings(懒加载) |
 | 大模型 | qwen-plus(兼容 OpenAI API) |
 | 搜索引擎 | Tavily Search API |
 | 前端 | Streamlit(自定义css主题) |
@@ -282,7 +282,7 @@ ai-qa-agent/
 ├── pages/
 │   └── 02_技术架构.py     # 技术架构展示页（Mermaid 流程图 + 技术栈 + 特性亮点）
 ├── agent.py              # Agent 核心逻辑（LangGraph 三节点状态图 + 四级容错）
-├── rag_utils.py          # RAG 知识库管理器（懒加载 Embedding + 混合检索 + 来源多样性）
+├── rag_utils.py          # RAG 知识库管理器（懒加载 Embedding + jieba分词BM25 + 混合检索 + 来源多样性）
 ├── init_db.py            # 数据库初始化脚本（含 8 条测试员工数据）
 ├── config.yaml.example   # 配置文件模板（6 key，复制为 config.yaml 即用）
 ├── requirements.txt      # 精简核心依赖（15 个包，已锁定版本）

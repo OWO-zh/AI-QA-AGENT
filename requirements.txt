@@ -9,6 +9,7 @@ openai==2.31.0
 tavily-python==0.7.23
 PyYAML==6.0.3
 sentence-transformers==5.4.1
+jieba==0.42.1
 rank-bm25==0.2.2
 pypdf==6.10.0
 numpy==2.4.4

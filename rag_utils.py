@@ -5,7 +5,7 @@ rag_utils.py — 混合检索知识库模块
 
 检索策略：
     1. FAISS 向量检索（语义相似度）── 召回 Top-10
-    2. BM25 关键词检索（精确匹配）── 召回 Top-10
+    2. BM25 关键词检索（jieba 搜索引擎模式中文分词）── 召回 Top-10
     3. 合并去重 → BGE-Reranker 精排 → 取 Top-K
 
 安全机制：
@@ -18,15 +18,17 @@ rag_utils.py — 混合检索知识库模块
     RAGManager: 懒加载 Embedding + Reranker 模型，提供 add_documents / search 接口
 """
 
+import logging
 import os
+import re
 import tempfile
 import traceback
-import logging
 from typing import Tuple
 
 # 注：HuggingFace 镜像与缓存等环境变量在 agent.py 配置加载后统一设置
 # （本地自动启用国内镜像，Streamlit Cloud 自动直连），此处保持纯净的第三方导入。
 
+import jieba
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -43,6 +45,27 @@ EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"  # 轻量中文嵌入模型，仅90MB
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 
 logger = logging.getLogger("RAGManager")
+
+# ========== BM25 分词工具 ==========
+_PUNCT_ONLY = re.compile(r"^[\W_]+$")  # 纯标点/符号 token（不含中文、字母或数字）
+
+
+def _tokenize(text: str) -> list:
+    """jieba 搜索引擎模式分词，BM25 索引与查询两侧共用。
+
+    为什么用 jieba：中文无空格分隔，按空格切分（split）会让整个文本块
+    退化为单个 token，导致 BM25 关键词匹配完全失效。
+    为什么用搜索引擎模式（cut_for_search）：在完整词之外额外生成子词，
+    召回率高于精确模式；精度由下游 BGE-Reranker 精排保证。
+
+    参数:
+        text: 待分词文本
+
+    返回:
+        token 列表（已过滤空白与纯标点 token）
+    """
+    tokens = jieba.cut_for_search(text)
+    return [t for t in tokens if t.strip() and not _PUNCT_ONLY.match(t)]
 
 
 class RAGManager:
@@ -180,9 +203,13 @@ class RAGManager:
 
         # 7. 构建 FAISS 向量库（基于 Embedding 向量）
         self.vector_store = FAISS.from_documents(all_docs, self.embeddings)
-        # 8. 构建 BM25 关键词索引
+        # 8. 构建 BM25 关键词索引（jieba 搜索引擎模式分词）
+        try:
+            jieba.initialize()  # 预热词典（首次约1-3秒），避免第一次提问时卡顿
+        except Exception as e:
+            logger.warning(f"jieba 词典预热失败: {str(e)}")
         self.corpus_texts = [doc.page_content for doc in all_docs]
-        tokenized_corpus = [text.split() for text in self.corpus_texts]
+        tokenized_corpus = [_tokenize(text) for text in self.corpus_texts]
         self.bm25_index = BM25Okapi(tokenized_corpus)
         self.is_initialized = True
 
@@ -218,9 +245,12 @@ class RAGManager:
         vector_docs = self.vector_store.similarity_search(query, k=10)
         vector_texts = [doc.page_content for doc in vector_docs]
 
-        # BM25 关键词检索
-        tokenized_query = query.split()
-        bm25_top_texts = self.bm25_index.get_top_n(tokenized_query, self.corpus_texts, n=10)
+        # BM25 关键词检索（与索引侧共用 _tokenize，保证切分口径一致）
+        tokenized_query = _tokenize(query)
+        bm25_top_texts = []
+        if tokenized_query:
+            # 纯标点等无 token 查询跳过 BM25，避免返回无意义匹配
+            bm25_top_texts = self.bm25_index.get_top_n(tokenized_query, self.corpus_texts, n=10)
 
         # 合并去重（用文本内容去重，保证同一个文本块只出现一次）
         seen = set()

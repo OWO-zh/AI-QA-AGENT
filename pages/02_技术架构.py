@@ -222,7 +222,7 @@ RAG_FLOW = """flowchart LR
     subgraph recall["双路召回层"]
         direction TB
         S1["FAISS 语义检索<br/>向量相似度匹配"]:::decide
-        S2["BM25 关键词检索<br/>词法精确匹配"]:::tool
+        S2["BM25 关键词检索<br/>jieba中文分词+词法匹配"]:::tool
     end
     class recall subgraph_box
 
@@ -301,7 +301,7 @@ with col1:
 
     **RAG 引擎**
     - FAISS 向量存储
-    - BM25 关键词索引
+    - BM25 关键词索引（jieba 分词）
     - BGE-Reranker 精排
     - bge-small-zh-v1.5 嵌入
     """)
@@ -342,7 +342,7 @@ highlights = [
     ("🎯 智能意图路由",
      "基于 LLM Function Calling 自动识别用户意图，匹配最优信息源。支持单工具查询与多工具并行调度，工具调度准确率 100%（20/20 用例验证）。"),
     ("📚 混合检索 RAG",
-     "FAISS 向量语义检索 + BM25 关键词检索双路召回，合并去重后经 BGE-Reranker 精排。引入来源多样性算法，避免多文档场景下的检索偏置问题。"),
+     "FAISS 向量语义检索 + BM25（jieba 中文分词）关键词检索双路召回，合并去重后经 BGE-Reranker 精排。引入来源多样性算法，避免多文档场景下的检索偏置问题。"),
     ("🛡️ 四级容错降级",
      "一级：工具失败自动重试 → 二级：关键词扩展 / SQL 错误回传 LLM 修正 → 三级：LLM 调用异常静默兜底 → 四级：全局兜底回答，系统静默失败率 0%。"),
     ("🔒 企业级安全",
