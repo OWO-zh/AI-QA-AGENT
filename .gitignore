@@ -1,29 +1,25 @@
-# 1. 保护核心配置文件
+# ===== 1. 密钥与配置(最高优先级) =====
 config.yaml
+.env
+.streamlit/secrets.toml
 
-# 2. Python 虚拟环境文件夹
+# ===== 2. Python 运行产物 =====
 venv/
 env/
 .venv/
-
-# 3. Python 缓存文件
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# 4. 临时文件
-*.tmp
+# ===== 3. 日志与临时文件 =====
 *.log
+*.tmp
 .DS_Store
 
-# 5. 向量库文件夹
+# ===== 4. 模型与索引缓存 =====
+.hf_cache/
 faiss_index/
 
-# 6. HuggingFace 模型缓存（本地开发，云端自动重建）
-.hf_cache/
-
-# 7. 上传的测试 PDF 文件夹
+# ===== 5. 测试数据 =====
 15data/
-
-.env
