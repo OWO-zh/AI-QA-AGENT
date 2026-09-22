@@ -4,11 +4,11 @@ app.py — Streamlit 可视化界面
 企业智能信息助手的 Web 入口，基于 Streamlit 构建聊天界面。
 
 功能：
-    - 首页欢迎引导：功能说明 + 一键测试按钮，面试官无需摸索
-    - 预设问题：20 条测试用例按分类编排，点击即可体验
-    - 侧边栏：文件上传、知识库构建、能力展示、对话清空
+    - 示例知识库自动加载：访客开箱即问，无需上传（服务器级缓存共享只读）
+    - 建议问题 chips + 20 条预设问题：一键测试，面试官无需摸索
+    - 侧边栏：文件上传、知识库构建、恢复示例库、能力展示、对话清空
     - 主区域：聊天消息流，支持工具调用详情展开
-    - 会话管理：基于 st.session_state 的多轮对话状态保持
+    - 会话管理：基于 st.session_state 的多轮对话状态保持（会话索引与示例库隔离）
 
 架构：
     app.py (UI 层) → agent.py (Agent 逻辑) → rag_utils.py (知识库检索)
@@ -214,45 +214,68 @@ PRESET_QUESTIONS = {
     ],
 }
 
-# ===== 欢迎引导文案 =====
-WELCOME_HTML = """
-<div class="welcome-card">
-<h2 style="margin-top:0;">👋 欢迎体验企业智能信息助手</h2>
-<p style="color:#64748b;font-size:1.05rem;">
-基于 <b>LangGraph + RAG + Function Calling</b> 构建的多工具协同 Agent。
-上传 PDF 文档后，您可以向它提问关于文档内容、公司数据、外部资讯的任何问题——
-Agent 会<b>自动识别意图、自主调度工具、整合多源信息</b>给出带溯源的精准回答。
-</p>
-<div style="margin-top:1rem;">
-<span class="feature-pill">📚 私有知识库问答</span>
-<span class="feature-pill">🏢 SQL 数据库查询</span>
-<span class="feature-pill">🌐 联网实时搜索</span>
-<span class="feature-pill">🔄 多工具协同调度</span>
-<span class="feature-pill">🛡️ SQL 安全校验</span>
-<span class="feature-pill">🔁 四级容错降级</span>
-</div>
-</div>
-"""
+# ===== 输入框上方建议问题 chips（知识库/数据库/联网各 1 条） =====
+SUGGESTED_QUESTIONS = [
+    "知识库里有什么内容？",
+    "研发部平均工资是多少？",
+    "2026 年 AI 有哪些新政策？",
+]
 
 
 # ===== 云端演示防护配置（仅 is_cloud 时生效，本地开发不受限制）=====
 MAX_QUESTIONS = 25   # 每个会话最多提问次数（覆盖 20 条用例 + 5 次余量）
 MIN_INTERVAL = 8     # 两次提问最小间隔（秒），防脚本刷量
 
-# ---------- 模型缓存（Streamlit Cloud 休眠重启不重复下载）----------
-@st.cache_resource(show_spinner="正在加载 AI 模型（首次需下载 Embedding + Reranker，约 1.1GB，请耐心等待）...")
-def create_rag_manager(reranker_model: str):
-    """缓存 RAGManager 实例。
+# ---------- 示例知识库（服务器级缓存，所有会话共享只读） ----------
+SAMPLE_DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_docs")
 
-    @st.cache_resource 确保模型在 Streamlit Server 级别只加载一次：
-      - 同一用户多次 rerun → 命中缓存，秒级响应
-      - 多用户并发访问 → 共享同一份模型内存
-      - 云端休眠唤醒后 → 首次访问重新加载，后续命中缓存
 
-    参数:
-        reranker_model: 重排序模型名，作为缓存 key 的一部分
+class _SampleDocFile:
+    """把本地示例文档包装成与 Streamlit UploadedFile 相同的最小接口。
+
+    复用 rag_utils.add_documents 的校验与解析流程（含跳过清单展示），
+    不引入新的文件解析逻辑。
     """
-    return RAGManager(reranker_model=reranker_model)
+
+    def __init__(self, path: str):
+        self.name = os.path.basename(path)
+        self.size = os.path.getsize(path)
+        self._path = path
+
+    def getvalue(self):
+        """读取文件字节内容（add_documents 通过此方法取内容）。"""
+        with open(self._path, "rb") as f:
+            return f.read()
+
+
+@st.cache_resource(show_spinner="正在加载示例知识库（首次约 12 秒）...")
+def build_sample_rag():
+    """构建示例知识库索引（服务器级缓存，命中后秒开）。
+
+    首次调用时解析 sample_docs/ 下全部 .txt 并构建 FAISS+BM25 双索引，
+    之后所有会话共享同一份只读索引；模型内存由 rag_utils 模块级共享
+    单例控制，与用户会话索引不重复加载。
+
+    返回:
+        (RAGManager 示例库实例, add_documents 结构化构建结果)
+    """
+    names = sorted(f for f in os.listdir(SAMPLE_DOCS_DIR) if f.lower().endswith(".txt"))
+    files = [_SampleDocFile(os.path.join(SAMPLE_DOCS_DIR, name)) for name in names]
+    sample_rag = RAGManager()
+    result = sample_rag.add_documents(files)
+    return sample_rag, result
+
+
+# ---------- 激活知识库选择（示例库 / 会话索引） ----------
+def get_active_rag():
+    """返回当前生效的知识库：会话已上传构建→会话索引，否则→示例库索引。"""
+    return (st.session_state.rag_manager if st.session_state.rag_manager.is_initialized
+            else st.session_state.sample_rag)
+
+
+def refresh_agent_rag():
+    """把当前生效的知识库注入 Agent（初始化 / 构建成功 / 恢复示例库后调用）。"""
+    set_rag_manager(get_active_rag())
 
 
 # ---------- 会话初始化 ----------
@@ -263,12 +286,18 @@ def init_session():
     if "messages" not in st.session_state:
         st.session_state.messages = [{
             "role": "assistant",
-            "content": "你好！我是企业智能信息助手，支持内部数据库查询、联网搜索、私有知识库问答。\n\n💡 **快速体验**：在左侧边栏点击任意预设问题，即可一键测试。"
+            "content": "你好！我是企业智能信息助手。点击下方推荐问题或左侧预设即可体验，也可直接输入任意问题。"
         }]
     if "rag_manager" not in st.session_state:
-        st.session_state.rag_manager = create_rag_manager(
+        # 会话级用户索引：每会话独立，上传构建只影响本会话，不污染示例库缓存
+        st.session_state.rag_manager = RAGManager(
             reranker_model=config.get("reranker_model", "BAAI/bge-reranker-base")
         )
+    if "sample_rag" not in st.session_state:
+        # 示例知识库：服务器级缓存共享只读（首次构建约 12s，命中后秒开）
+        st.session_state.sample_rag, st.session_state.sample_result = build_sample_rag()
+    if "sample_result_shown" not in st.session_state:
+        st.session_state.sample_result_shown = False
     if "agent_state" not in st.session_state:
         st.session_state.agent_state = {
             "messages": [],
@@ -289,7 +318,7 @@ def init_session():
 
 
 init_session()
-set_rag_manager(st.session_state.rag_manager)
+refresh_agent_rag()
 
 # ---------- 云端访问保护：密码门（仅云端生效，本地开发直接跳过）----------
 if is_cloud:
@@ -404,8 +433,9 @@ with st.sidebar:
                 st.error("知识库构建失败：系统内部异常，请重试或更换文件（详情已记录日志）。")
             else:
                 if result["success_chunks"] > 0:
-                    # 构建成功：绿色提示（含入库分片数）
+                    # 构建成功：绿色提示（含入库分片数），并切换 Agent 到会话索引
                     st.success(result["message"])
+                    refresh_agent_rag()
                 else:
                     # 全部文件失败：红色提示，明确索引未更新
                     st.error(f"❌ 知识库构建失败：{result['message']}")
@@ -414,13 +444,30 @@ with st.sidebar:
                     st.warning(f"⚠️ 已跳过「{item['file']}」：{item['reason']}")
                 # 注意：这里不再 st.rerun()——之前提示刚显示就被重跑冲掉，导致用户看不到任何反馈
 
-    # 展示加载分片数量（修复：你原来的 .documents 不存在）
+    # 示例库构建异常/跳过警告：每会话只展示一次（不静默失败）
+    if not st.session_state.sample_result_shown:
+        st.session_state.sample_result_shown = True
+        sample_result = st.session_state.sample_result
+        if sample_result["success_chunks"] == 0:
+            st.error(f"示例知识库加载失败：{sample_result['message']}")
+        for item in sample_result["skipped"]:
+            st.warning(f"⚠️ 示例文档「{item['file']}」加载跳过：{item['reason']}")
+
+    # 当前知识库状态
     if st.session_state.rag_manager.is_initialized:
         # corpus_texts 就是所有文本分片列表
         chunk_count = len(st.session_state.rag_manager.corpus_texts)
-        st.caption(f"✅ 知识库已就绪，共 {chunk_count} 个文本分片")
+        st.caption(f"✅ 已使用你上传的文档（共 {chunk_count} 个分片）")
+        # 已上传过文档时，提供切回示例库的入口
+        if st.button("↩️ 恢复示例库", use_container_width=True):
+            # 清空会话用户索引，回到示例库（对话记录保留）
+            st.session_state.rag_manager = RAGManager(
+                reranker_model=config.get("reranker_model", "BAAI/bge-reranker-base")
+            )
+            refresh_agent_rag()
+            st.rerun()
     else:
-        st.caption("⏳ 未上传文档，知识库类问题将提示上传文件")
+        st.caption("📦 示例库已就绪，可直接提问，也可上传文档替换")
 
     st.divider()
 
@@ -453,9 +500,18 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# 欢迎引导（仅首次访问时显示）
-if len(st.session_state.messages) <= 1:
-    st.markdown(WELCOME_HTML, unsafe_allow_html=True)
+# 功能徽章（副标题下一行小徽章；详细技术叙事见页面底部「关于本项目」）
+st.markdown(
+    "<div style='margin-top:0.4rem;'>"
+    "<span class='feature-pill'>📚 私有知识库</span>"
+    "<span class='feature-pill'>🏢 SQL 数据库</span>"
+    "<span class='feature-pill'>🌐 联网搜索</span>"
+    "<span class='feature-pill'>🔄 多工具协同</span>"
+    "<span class='feature-pill'>🛡️ SQL 安全校验</span>"
+    "<span class='feature-pill'>🔁 四级容错</span>"
+    "</div>",
+    unsafe_allow_html=True
+)
 
 st.markdown("<br>", unsafe_allow_html=True)
 

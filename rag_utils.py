@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import traceback
 from typing import Tuple
 
@@ -47,6 +48,59 @@ RERANKER_MODEL = "BAAI/bge-reranker-base"
 # 挂为 "Agent" 的子 logger：继承 agent.py 中 "Agent" 的 FileHandler，
 # 使 RAG 模块日志（含跳过清单）自动写入 agent_run.log，便于远程排查
 logger = logging.getLogger("Agent.RAGManager")
+
+# ========== 共享模型单例（懒加载，所有 RAGManager 实例复用同一份模型内存） ==========
+# 示例库索引与会话用户索引是两套 RAGManager 实例；若各自懒加载模型，
+# embedding + reranker 内存翻倍，云端 1GB 内存限制下有 OOM 风险。
+# 因此模型对象提升为模块级单例：首次调用时才初始化（import 不加载任何模型），
+# 加载失败原样上抛，由调用方既有 try/except 承接（不破坏四级容错路径）。
+_model_lock = threading.Lock()
+_shared_embeddings = None
+_shared_rerankers = {}  # model_name -> CrossEncoder 实例
+
+
+def _get_shared_embeddings():
+    """返回全局共享的 Embedding 模型（懒加载 + 双重检查锁，线程安全）。
+
+    加载失败时记录「模型单例共享」标签日志后原样上抛，
+    由调用方（构建/检索的既有 try/except）按四级容错路径处理。
+    """
+    global _shared_embeddings
+    if _shared_embeddings is None:
+        with _model_lock:
+            if _shared_embeddings is None:
+                try:
+                    logger.info(f"模型单例共享: 开始加载 Embedding 模型 {EMBEDDING_MODEL}")
+                    _shared_embeddings = HuggingFaceEmbeddings(
+                        model_name=EMBEDDING_MODEL,
+                        model_kwargs={'local_files_only': False}
+                    )
+                    logger.info("模型单例共享: Embedding 模型加载完成")
+                except Exception as e:
+                    logger.error(f"模型单例共享: Embedding 模型加载失败 - {type(e).__name__}: {str(e)}")
+                    raise
+    return _shared_embeddings
+
+
+def _get_shared_reranker(model_name: str):
+    """返回全局共享的 Reranker 模型（按模型名缓存，懒加载，线程安全）。
+
+    参数:
+        model_name: 重排序模型名（来自配置注入）
+
+    加载失败时记录「模型单例共享」标签日志后原样上抛，同 Embedding。
+    """
+    if model_name not in _shared_rerankers:
+        with _model_lock:
+            if model_name not in _shared_rerankers:
+                try:
+                    logger.info(f"模型单例共享: 开始加载 Reranker 模型 {model_name}")
+                    _shared_rerankers[model_name] = CrossEncoder(model_name, max_length=512)
+                    logger.info("模型单例共享: Reranker 模型加载完成")
+                except Exception as e:
+                    logger.error(f"模型单例共享: Reranker 模型加载失败 - {type(e).__name__}: {str(e)}")
+                    raise
+    return _shared_rerankers[model_name]
 
 # ========== BM25 分词工具 ==========
 _PUNCT_ONLY = re.compile(r"^[\W_]+$")  # 纯标点/符号 token（不含中文、字母或数字）
@@ -109,8 +163,6 @@ class RAGManager:
         """
         self.vector_store = None
         self.is_initialized = False
-        self._embeddings = None
-        self._reranker = None
         self._reranker_model = reranker_model
         self.bm25_index = None
         self.corpus_texts = None
@@ -122,24 +174,16 @@ class RAGManager:
 
     @property
     def embeddings(self):
-        """获取 Embedding 模型，若未初始化则自动加载。"""
-        if self._embeddings is None:
-            self._embeddings = HuggingFaceEmbeddings(
-                model_name=EMBEDDING_MODEL,
-                model_kwargs={'local_files_only': False}
-            )
-        return self._embeddings
+        """获取 Embedding 模型（全局共享单例，所有实例复用同一份内存）。"""
+        return _get_shared_embeddings()
 
     @property
     def reranker(self):
-        """获取 Reranker 模型，若未初始化则自动加载。
+        """获取 Reranker 模型（全局共享单例，所有实例复用同一份内存）。
 
         优先使用外部注入的模型名，未注入则回退到默认常量。
         """
-        if self._reranker is None:
-            model_name = self._reranker_model or RERANKER_MODEL
-            self._reranker = CrossEncoder(model_name, max_length=512)
-        return self._reranker
+        return _get_shared_reranker(self._reranker_model or RERANKER_MODEL)
 
     # ========== 文件安全校验 ==========
     def _validate_file(self, filename: str, file_size: int) -> Tuple[bool, str]:
