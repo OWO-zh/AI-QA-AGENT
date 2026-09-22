@@ -44,7 +44,9 @@ MAX_FILE_COUNT = 5
 EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"  # 轻量中文嵌入模型，仅90MB，替代text2vec(400MB)
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 
-logger = logging.getLogger("RAGManager")
+# 挂为 "Agent" 的子 logger：继承 agent.py 中 "Agent" 的 FileHandler，
+# 使 RAG 模块日志（含跳过清单）自动写入 agent_run.log，便于远程排查
+logger = logging.getLogger("Agent.RAGManager")
 
 # ========== BM25 分词工具 ==========
 _PUNCT_ONLY = re.compile(r"^[\W_]+$")  # 纯标点/符号 token（不含中文、字母或数字）
@@ -66,6 +68,35 @@ def _tokenize(text: str) -> list:
     """
     tokens = jieba.cut_for_search(text)
     return [t for t in tokens if t.strip() and not _PUNCT_ONLY.match(t)]
+
+
+# ========== 解析异常中文映射 ==========
+# (关键字列表, 人类可读原因)，按顺序匹配，先特殊后通用；原始异常只进日志
+_PARSE_ERROR_MAP = [
+    (("encrypted", "decrypt", "password"), "文件疑似加密，无法解析"),
+    (("invalid pdf header", "not a pdf", "pdf header", "startxref"), "文件损坏或不是有效的 PDF（头部校验失败）"),
+    (("stream has ended", "unexpected eof", "eof marker"), "文件损坏（PDF 数据流不完整）"),
+    (("codec", "encoding", "unicode"), "文件编码无法识别（非 UTF-8）"),
+]
+
+
+def _map_parse_error(e: Exception) -> str:
+    """将文档解析异常映射为人类可读的中文原因。
+
+    用户界面不直接透出原始异常（可能含 b'...' 字节串等内部细节），
+    原始异常完整写入日志供排查。
+
+    参数:
+        e: 解析过程抛出的异常对象
+
+    返回:
+        简短中文原因说明
+    """
+    text = str(e).lower()
+    for keywords, reason in _PARSE_ERROR_MAP:
+        if any(kw in text for kw in keywords):
+            return reason
+    return "文件解析失败（原因详见运行日志）"
 
 
 class RAGManager:
@@ -137,7 +168,7 @@ class RAGManager:
         return True, "校验通过"
 
     # ========== 文档添加与索引构建 ==========
-    def add_documents(self, uploaded_files: list) -> Tuple[bool, str]:
+    def add_documents(self, uploaded_files: list) -> dict:
         """处理上传文件并构建混合索引。
 
         对上传文件列表执行完整流水线：
@@ -145,24 +176,32 @@ class RAGManager:
             → 4. 文档加载 → 5. 文本分割 → 6. 清理临时文件
             → 7. 构建 FAISS 向量索引 → 8. 构建 BM25 关键词索引
 
+        单文件解析失败做故障隔离：跳过该文件并记入 skipped，不中断整批构建；
+        全部文件失败时不更新索引（旧索引保持可用）。
+
         参数:
             uploaded_files: Streamlit UploadedFile 对象列表
 
         返回:
-            (是否成功, 结果说明) 元组
+            结构化结果字典：
+                {
+                    "success_chunks": int,  # 成功入库的文本分片数；0 表示构建失败且索引未更新
+                    "skipped": [{"file": 文件名, "reason": 人类可读原因}, ...],
+                    "message": str,         # 汇总提示（成功=分片数说明；失败=具体原因）
+                }
         """
         # 1. 文件数量检查
         if len(uploaded_files) > MAX_FILE_COUNT:
-            return False, f"最多上传 {MAX_FILE_COUNT} 个文件"
+            return {"success_chunks": 0, "skipped": [], "message": f"最多上传 {MAX_FILE_COUNT} 个文件"}
 
         all_docs = []
-        fail_msg_list = []  # 收集解析失败的文件提示，最后统一返回
+        skipped_list = []  # 收集被跳过的文件（人类可读原因），最后统一返回
 
         for file_obj in uploaded_files:
             # 2. 单个文件安全校验
             is_safe, msg = self._validate_file(file_obj.name, file_obj.size)
             if not is_safe:
-                return False, f"{file_obj.name} 校验失败: {msg}"
+                return {"success_chunks": 0, "skipped": [], "message": f"{file_obj.name} 校验失败: {msg}"}
 
             suffix = os.path.splitext(file_obj.name)[1]
             tmp_path = None  # 避免 finally 块中 NameError
@@ -185,21 +224,24 @@ class RAGManager:
 
             except Exception as e:
                 # 捕获单个文件所有异常：加密PDF、损坏PDF、编码错误、IO错误等
-                err_info = f"{file_obj.name} 解析失败（疑似加密/损坏文件）：{str(e)}"
-                logger.error(err_info)
-                fail_msg_list.append(err_info)
+                # 原始异常完整进日志；界面只展示映射后的中文原因（不暴露 b'...' 字节串）
+                logger.error(f"{file_obj.name} 解析失败: {type(e).__name__} - {str(e)}")
+                skipped_list.append({"file": file_obj.name, "reason": _map_parse_error(e)})
                 continue  # 跳过当前坏文件，继续循环下一个
             finally:
                 # 6. 清理临时文件
                 if tmp_path and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
 
-        # 循环结束后判断结果
+        # 循环结束后：先记录跳过清单汇总日志（写入既有日志，便于远程排查）
+        if skipped_list:
+            logger.warning("知识库构建跳过清单（%d 个）: %s",
+                           len(skipped_list), ", ".join(item["file"] for item in skipped_list))
+
+        # 全部文件失败：不更新索引（旧索引保持可用），明确告知用户
         if not all_docs:
-            err_tip = "所有文件均未提取到有效文本"
-            if fail_msg_list:
-                err_tip += "\n" + "\n".join(fail_msg_list)
-            return False, err_tip
+            return {"success_chunks": 0, "skipped": skipped_list,
+                    "message": "所有文件均未提取到有效文本，知识库索引未更新"}
 
         # 7. 构建 FAISS 向量库（基于 Embedding 向量）
         self.vector_store = FAISS.from_documents(all_docs, self.embeddings)
@@ -213,13 +255,10 @@ class RAGManager:
         self.bm25_index = BM25Okapi(tokenized_corpus)
         self.is_initialized = True
 
-        # 拼接最终返回信息（附带失败文件提醒）
-        success_tip = f"知识库构建完成，共 {len(all_docs)} 个文本块（向量 + BM25 双索引）"
-        if fail_msg_list:
-            success_tip += "\n⚠️ 部分文件跳过：\n" + "\n".join(fail_msg_list)
-
-        logger.info(success_tip)
-        return True, success_tip
+        # 汇总返回：成功说明（分片数）+ 跳过清单（由前端逐文件展示警告）
+        message = f"知识库构建完成，共 {len(all_docs)} 个文本块（向量 + BM25 双索引）"
+        logger.info(message)
+        return {"success_chunks": len(all_docs), "skipped": skipped_list, "message": message}
 
     # ========== 混合检索核心 ==========
     def _hybrid_retrieve(self, query: str, top_k: int = 3) -> list:

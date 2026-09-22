@@ -395,14 +395,24 @@ with st.sidebar:
     disable_build = uploaded is None or len(uploaded) == 0
     if st.button("🔄 构建知识库", use_container_width=True, disabled=disable_build):
         with st.spinner("正在解析文档、文本切片、构建FAISS+BM25双索引..."):
-            # 调用后端，接收后端拼接好的完整提示（含损坏文件警告）
-            ok, msg = st.session_state.rag_manager.add_documents(uploaded)
-            if ok:
-                # 直接打印后端返回的完整信息，包含：总分片数 + 跳过的坏文件提醒
-                st.success(msg)
-                st.rerun()
+            try:
+                # 后端返回结构化结果：success_chunks 分片数 + skipped 跳过清单 + message 汇总
+                result = st.session_state.rag_manager.add_documents(uploaded)
+            except Exception as e:
+                # 未捕获异常兜底：界面只给友好提示，细节进日志，不裸抛 traceback
+                logger.error(f"知识库构建未捕获异常: {type(e).__name__} - {str(e)}", exc_info=True)
+                st.error("知识库构建失败：系统内部异常，请重试或更换文件（详情已记录日志）。")
             else:
-                st.error(f"❌ 知识库构建失败：{msg}")
+                if result["success_chunks"] > 0:
+                    # 构建成功：绿色提示（含入库分片数）
+                    st.success(result["message"])
+                else:
+                    # 全部文件失败：红色提示，明确索引未更新
+                    st.error(f"❌ 知识库构建失败：{result['message']}")
+                # 逐文件展示跳过警告（成功/失败分支都可能存在；无跳过则不显示）
+                for item in result["skipped"]:
+                    st.warning(f"⚠️ 已跳过「{item['file']}」：{item['reason']}")
+                # 注意：这里不再 st.rerun()——之前提示刚显示就被重跑冲掉，导致用户看不到任何反馈
 
     # 展示加载分片数量（修复：你原来的 .documents 不存在）
     if st.session_state.rag_manager.is_initialized:
