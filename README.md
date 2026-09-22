@@ -94,10 +94,13 @@ flowchart LR
     classDef process fill:#fafafa,stroke:#90a4ae,stroke-width:1px,color:#37474f
     classDef subgraph_box fill:none,stroke:#cfd8dc,stroke-width:1px
 
-    %% ========== 索引构建链路 ==========
-    subgraph idx["索引构建 add_documents"]
+    %% ========== 索引构建链路（双入口：示例库缓存 / 会话上传） ==========
+    subgraph idx["索引构建 add_documents（双入口）"]
         direction LR
-        U1["上传文件"]:::entry
+        U0["内置示例文档<br/>sample_docs/ 首次访问自动构建"]:::entry
+        U0A{"缓存命中判断<br/>@st.cache_resource"}:::decide
+        U0B["命中复用<br/>服务器级共享只读索引"]:::process
+        U1["用户上传文件"]:::entry
         U2{"数量≤5 校验通过?"}:::decide
         U3["拒绝上传<br/>提示文件数量超限"]:::error
         U4["文本预处理<br/>清洗格式/去噪/归一化"]:::process
@@ -105,11 +108,15 @@ flowchart LR
         U6["Embedding 模型向量化"]:::process
         U7["FAISS 向量索引构建"]:::decide
         U8["BM25 关键词索引构建"]:::tool
-        U9["双索引落库持久化"]:::entry
+        U9["双索引就绪<br/>（示例库全局缓存共享 / 会话独立）"]:::entry
 
+        U0 --> U0A
+        U0A -- "命中" --> U0B --> U9
+        U0A -- "未命中自动构建" --> U4
         U1 --> U2
         U2 -- "否" --> U3
-        U2 -- "是" --> U4 --> U5 --> U6 --> U7
+        U2 -- "是" --> U4
+        U4 --> U5 --> U6 --> U7
         U5 --> U8
         U7 --> U9
         U8 --> U9
@@ -152,6 +159,9 @@ flowchart LR
     %% 连线逻辑
     Q --> S1
     Q --> S2
+    %% 双入口构建 → 查询链路汇合（双索引就绪后供双路召回使用）
+    U9 --> S1
+    U9 --> S2
     S1 --> S3
     S2 --> S3
     S3 --> S4
@@ -170,10 +180,12 @@ flowchart LR
 - **三源信息协同**：打通私有文档知识库、业务数据库、公网实时资讯，支持单工具与多工具混合调用
 - **智能意图路由**：基于大模型推理自动匹配最优信息源，无需人工指定工具类型
 - **高可靠 RAG 问答**：FAISS 向量 + BM25（jieba 中文分词）关键词双路召回 + BGE-Reranker 精排，来源多样性算法避免检索偏置，答案可溯源至文档片段
+- **开箱即问示例知识库**：内置企业安全手册、火星殖民计划书两份示例文档，首次访问自动构建共享只读索引，无需上传文档即可体验完整 RAG
+- **会话级索引隔离**：每会话持有独立 RAGManager，上传构建只影响本会话，不污染共享示例库缓存，支持一键恢复
 - **云端部署体验**：Streamlit Cloud 一键部署，`@st.cache_resource` 缓存模型避免冷启动等待，首次下载后秒级响应
 - **企业级安全防护**：SQL 白名单校验、文件格式白名单、会话级数据隔离，敏感数据不出域
 - **多级容错降级**：工具重试→关键词扩展/SQL自纠错→LLM异常静默兜底→全局兜底回答，四级机制，系统静默失败率 0%
-- **可视化交互界面**：Streamlit 多页面应用——首页含 20 条预设问题一键测试 + 工具调用日志面板；架构页展示完整 Mermaid 流程图与技术栈清单
+- **可视化交互界面**：Streamlit 多页面应用——首页含功能徽章 + 快速提问 chips + 20 条预设问题一键测试 + 工具调用日志面板；架构页展示完整 Mermaid 流程图与技术栈清单
 
 ## 🛠️ 技术栈
 | 分类 | 技术选型 |
@@ -262,7 +274,7 @@ demo_password = "你的演示访问密码"
 部署成功后访问 `https://你的app名.streamlit.app`：
 - 首先需输入访问密码（`demo_password`），防止陌生人消耗 API 额度
 - 云端演示内置防护：每会话 25 次提问上限 + 8 秒间隔限制（本地开发不受影响）
-- 首页自动显示欢迎引导和 20 条预设问题
+- 首页显示功能徽章、快速提问 chips 与 20 条预设问题，内置示例知识库开箱即问
 - 首次访问时模型自动下载（约 1.1GB，spinner 有提示），后续秒级响应
 - 侧边栏 "技术架构" 页面可直接查看完整技术设计
 
@@ -272,17 +284,18 @@ demo_password = "你的演示访问密码"
 |------|------|------|
 | 部署后页面空白 | Secrets 未配置或 Key 名拼写错误 | 检查 Secrets 的 TOML 格式和 Key 名 |
 | 数据库查询报错 | `company.db` 被 `.gitignore` 排除 | 确认 `company.db` 已提交到 Git（当前版本已包含） |
-| 知识库检索无结果 | 未上传文档 | 在侧边栏上传 PDF/TXT 后点击"构建知识库" |
+| 知识库检索无结果 | 示例库被上传文档替换 | 默认示例库应可正常回答；若曾上传文档替换，点侧边栏「恢复示例库」即可 |
 | 长时间转圈 | 首次下载 Embedding + Reranker 模型 | 等待约 3-5 分钟，后续访问秒开 |
 
 ## 📁 项目目录结构
 ```plaintext
 ai-qa-agent/
-├── app.py                # Streamlit 首页（聊天交互 + 20条预设问题 + 欢迎引导）
+├── app.py                # Streamlit 首页（功能徽章 + 快速提问chips + 20条预设问题 + 工具调用日志）
 ├── pages/
 │   └── 02_技术架构.py     # 技术架构展示页（Mermaid 流程图 + 技术栈 + 特性亮点）
 ├── agent.py              # Agent 核心逻辑（LangGraph 三节点状态图 + 四级容错）
-├── rag_utils.py          # RAG 知识库管理器（懒加载 Embedding + jieba分词BM25 + 混合检索 + 来源多样性）
+├── rag_utils.py          # RAG 知识库管理器（懒加载 Embedding + jieba分词BM25 + 混合检索 + 来源多样性 + 示例库共享缓存 + 会话级索引隔离）
+├── sample_docs/          # 内置示例知识库文档（企业安全手册 + 火星殖民计划书），开箱即问
 ├── init_db.py            # 数据库初始化脚本（含 8 条测试员工数据）
 ├── config.yaml.example   # 配置文件模板（6 key，复制为 config.yaml 即用）
 ├── requirements.txt      # 精简核心依赖（15 个包，已锁定版本）
