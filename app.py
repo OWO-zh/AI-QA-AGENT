@@ -161,22 +161,15 @@ st.markdown("""
         border-color: #3b82f6 !important;
         background: #eff6ff !important;
     }
-    /* 欢迎区域 */
-    .welcome-card {
-        background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
-        border: 1px solid #bfdbfe;
-        border-radius: 16px;
-        padding: 2rem;
-        margin-bottom: 1.5rem;
-    }
+    /* 功能徽章（副标题下一行小徽章） */
     .feature-pill {
         display: inline-block;
         background: white;
         border: 1px solid #e2e8f0;
         border-radius: 24px;
-        padding: 0.5rem 1.2rem;
-        margin: 0.25rem;
-        font-size: 0.9rem;
+        padding: 0.3rem 0.85rem;
+        margin: 0.2rem 0.25rem 0.2rem 0;
+        font-size: 0.78rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -555,6 +548,15 @@ if st.session_state.pending_question:
             process_message(prompt)
         st.rerun()
 
+# 建议问题 chips（点击走与预设按钮相同的提问链路）
+st.markdown(
+    "<span class='caption'>💡 快速提问</span>",
+    unsafe_allow_html=True
+)
+if selected := st.pills("快速提问", SUGGESTED_QUESTIONS, key="quick_pills", label_visibility="collapsed"):
+    st.session_state.quick_pills = None  # 立即重置选中值，保证同一 chip 可重复点击
+    st.session_state.pending_question = selected
+
 # 用户输入
 if prompt := st.chat_input("输入问题，或点击左侧边栏的预设问题一键测试："):
     if try_consume_quota():
@@ -563,6 +565,20 @@ if prompt := st.chat_input("输入问题，或点击左侧边栏的预设问题�
         with st.chat_message("assistant"):
             process_message(prompt)
         st.rerun()
+
+# ---------- 关于本项目（原欢迎大卡的技术叙事，信息分层到此处） ----------
+with st.expander("📖 关于本项目"):
+    st.markdown("""
+**企业智能信息助手** 是基于 **LangGraph + RAG + Function Calling** 构建的多工具协同 Agent。
+
+- **LangGraph 三节点状态图**：decide（意图识别）→ tools（工具执行）→ answer（答案生成），含 SQL 错误回传自纠错
+- **混合检索 RAG**：FAISS 向量 + BM25（jieba 中文分词）双路召回，BGE-Reranker 精排，来源多样性保证多文档覆盖
+- **Function Calling 工具调度**：自主决策调用内部数据库、私有知识库、联网搜索，支持多工具协同
+- **四级容错降级**：工具重试 → 关键词扩展/SQL 自纠错 → LLM 异常兜底 → 全局兜底，静默失败率 0%
+- **企业级安全**：SQL 三层校验、文件上传白名单、云端演示密码门与额度限流
+
+上传 PDF/TXT 文档即可体验私有知识库问答；左侧「技术架构」页面含完整流程图与技术设计。
+""")
 
 # ---------- 页脚 ----------
 st.divider()
