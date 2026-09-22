@@ -8,9 +8,13 @@
   配置加载(顶部双轨:st.secrets / config.yaml)、三个工具函数、validate_sql_safety
   SQL 三层校验、TOOLS 定义、日志配置、命令行测试入口(python agent.py)
 - rag_utils.py:RAGManager 类——jieba 分词(_tokenize)、add_documents(文档校验与
-  FAISS+BM25 双索引构建)、_hybrid_retrieve(混合检索)、search(来源多样性+溯源)
+  FAISS+BM25 双索引构建)、_hybrid_retrieve(混合检索)、search(来源多样性+溯源)、
+  模型共享单例(_get_shared_embeddings/_get_shared_reranker 懒加载+双检锁)
 - app.py:Streamlit 入口——页面配置与 CSS、20 条预设问题、会话初始化、云端密码门
-  与额度限制、侧边栏、聊天 UI、工具调用日志展示
+  与额度限制、侧边栏、聊天 UI、工具调用日志展示、build_sample_rag() 示例知识库
+  构建(@st.cache_resource 服务器级共享只读缓存)、会话级 RAGManager 隔离、
+  get_active_rag()/refresh_agent_rag() 激活切换、「恢复示例库」按钮、st.pills
+  快速提问 chips、底部「关于本项目」expander(原 WELCOME_HTML 欢迎大卡已移除)
 - config.yaml:本地配置(含 API 密钥,禁止提交);云端等价物为 .streamlit/secrets.toml
 - company.db:SQLite 演示数据库(employees 表)
 - agent_run.log:运行日志(项目根)
