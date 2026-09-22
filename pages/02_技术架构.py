@@ -194,10 +194,13 @@ RAG_FLOW = """flowchart LR
     classDef process fill:#fafafa,stroke:#90a4ae,stroke-width:1px,color:#37474f
     classDef subgraph_box fill:none,stroke:#cfd8dc,stroke-width:1px
 
-    %% ========== 索引构建链路 ==========
-    subgraph idx["索引构建 add_documents"]
+    %% ========== 索引构建链路（双入口：示例库缓存 / 会话上传） ==========
+    subgraph idx["索引构建 add_documents（双入口）"]
         direction LR
-        U1["上传文件"]:::entry
+        U0["内置示例文档<br/>sample_docs/ 首次访问自动构建"]:::entry
+        U0A{"缓存命中判断<br/>@st.cache_resource"}:::decide
+        U0B["命中复用<br/>服务器级共享只读索引"]:::process
+        U1["用户上传文件"]:::entry
         U2{"数量≤5 校验通过?"}:::decide
         U3["拒绝上传<br/>提示文件数量超限"]:::error
         U4["文本预处理<br/>清洗格式/去噪/归一化"]:::process
@@ -205,11 +208,15 @@ RAG_FLOW = """flowchart LR
         U6["Embedding 模型向量化"]:::process
         U7["FAISS 向量索引构建"]:::decide
         U8["BM25 关键词索引构建"]:::tool
-        U9["双索引落库持久化"]:::entry
+        U9["双索引就绪<br/>（示例库全局缓存共享 / 会话独立）"]:::entry
 
+        U0 --> U0A
+        U0A -- "命中" --> U0B --> U9
+        U0A -- "未命中自动构建" --> U4
         U1 --> U2
         U2 -- "否" --> U3
-        U2 -- "是" --> U4 --> U5 --> U6 --> U7
+        U2 -- "是" --> U4
+        U4 --> U5 --> U6 --> U7
         U5 --> U8
         U7 --> U9
         U8 --> U9
@@ -252,6 +259,9 @@ RAG_FLOW = """flowchart LR
     %% 连线逻辑
     Q --> S1
     Q --> S2
+    %% 双入口构建 → 查询链路汇合（双索引就绪后供双路召回使用）
+    U9 --> S1
+    U9 --> S2
     S1 --> S3
     S2 --> S3
     S3 --> S4
