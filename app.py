@@ -241,13 +241,15 @@ class _SampleDocFile:
             return f.read()
 
 
-@st.cache_resource(show_spinner="正在加载示例知识库（首次约 12 秒）...")
+@st.cache_resource
 def build_sample_rag():
     """构建示例知识库索引（服务器级缓存，命中后秒开）。
 
     首次调用时解析 sample_docs/ 下全部 .txt 并构建 FAISS+BM25 双索引，
     之后所有会话共享同一份只读索引；模型内存由 rag_utils 模块级共享
     单例控制，与用户会话索引不重复加载。
+    冷启动提示由调用处（init_session 外层 st.spinner）统一提供，此处不再
+    嵌套 spinner 文案，避免双重提示。
 
     返回:
         (RAGManager 示例库实例, add_documents 结构化构建结果)
@@ -310,8 +312,11 @@ def init_session():
         st.session_state.last_question_time = 0.0
 
 
-init_session()
-refresh_agent_rag()
+# 冷启动提示：耗时初始化（示例库构建/模型加载）统一包 spinner，
+# 缓存命中时瞬间通过，不出现长时间 spinner（CLAUDE.md 工程纪律 4）
+with st.spinner("🚀 应用初始化中，首次访问需加载 AI 模型，约 10~30 秒，请稍候…"):
+    init_session()
+    refresh_agent_rag()
 
 # ---------- 云端访问保护：密码门（仅云端生效，本地开发直接跳过）----------
 if is_cloud:
@@ -321,10 +326,13 @@ if is_cloud:
             st.error("演示密码未配置，请联系管理员。")
             st.stop()
         st.markdown("# 🤖 企业智能信息助手")
-        st.markdown("本演示为邀请制访问，请输入访问密码后进入。")
+        st.markdown("本演示为公开访问，请输入体验密码后进入。")
         with st.form("auth_form"):
             pwd_input = st.text_input("访问密码", type="password")
             submitted = st.form_submit_button("进入演示")
+        # 密码公开化：登录页直接展示体验密码（防滥用软门槛，非隐私保护）。
+        # 仅云端且 demo_password 已配置时才会走到这里；本地开发无密码门。
+        st.caption(f"💡 体验密码：{demo_pwd}（本项目为公开演示，密码已开放）")
         if submitted:
             if pwd_input == demo_pwd:
                 st.session_state.authed = True
