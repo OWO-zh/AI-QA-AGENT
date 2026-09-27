@@ -358,10 +358,10 @@ def try_consume_quota() -> bool:
     now = time.time()
     if now - st.session_state.last_question_time < MIN_INTERVAL:
         wait = int(MIN_INTERVAL - (now - st.session_state.last_question_time)) + 1
-        st.warning(f"提问过于频繁，请等待 {wait} 秒后再试。")
+        st.warning(f"提问过于频繁，请等待 {wait} 秒后再试（演示环境限流，保障服务稳定）")
         return False
     if st.session_state.question_count >= MAX_QUESTIONS:
-        st.warning(f"演示提问次数已达上限（{MAX_QUESTIONS} 次），感谢体验！")
+        st.warning(f"演示提问次数已达上限（{MAX_QUESTIONS} 次）。重新进入会话可继续体验")
         return False
     st.session_state.question_count += 1
     st.session_state.last_question_time = now
@@ -564,6 +564,7 @@ st.markdown(
 if selected := st.pills("快速提问", SUGGESTED_QUESTIONS, key="quick_pills", label_visibility="collapsed"):
     st.session_state.quick_pills = None  # 立即重置选中值，保证同一 chip 可重复点击
     st.session_state.pending_question = selected
+    st.rerun()  # 立即重跑：让上方 pending_question 处理器（549 行附近）在重跑中消费，点击即提问
 
 # 用户输入
 if prompt := st.chat_input("输入问题，或点击左侧边栏的预设问题一键测试："):
